@@ -1879,11 +1879,12 @@ dependencies = [
 
 [[package]]
 name = "dashmap"
-version = "5.5.3"
+version = "6.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "978747c1d849a7d2ee5e8adc0159961c48fb7e5db2f06af6723b80123bb53856"
+checksum = "5041cc499144891f3790297212f32a74fb938e5136a14943f338ef9e0ae276cf"
 dependencies = [
  "cfg-if 1.0.4",
+ "crossbeam-utils",
  "hashbrown 0.14.3",
  "lock_api",
  "once_cell",
@@ -4235,6 +4236,24 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a4895175b425cb1f87721b59f0f286c2092bd4af812243672510e1ac53e2e0ad"
 
 [[package]]
+name = "ooze-ordering"
+version = "0.1.0"
+dependencies = [
+ "bincode",
+ "log",
+ "rand 0.9.4",
+ "rand_chacha 0.9.0",
+ "serde",
+ "serde-big-array",
+ "sha2 0.10.9",
+ "solana-keypair",
+ "solana-pubkey 4.2.0",
+ "solana-signature",
+ "solana-signer",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "opaque-debug"
 version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6566,6 +6585,7 @@ dependencies = [
  "min-max-heap",
  "num_cpus",
  "num_enum",
+ "ooze-ordering",
  "qualifier_attr",
  "rand 0.9.4",
  "rand_chacha 0.9.0",
