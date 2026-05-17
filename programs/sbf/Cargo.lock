@@ -2378,7 +2378,7 @@ dependencies = [
  "getrandom 0.3.1",
  "libm",
  "rand 0.9.4",
- "siphasher 1.0.2",
+ "siphasher 1.0.3",
 ]
 
 [[package]]
@@ -4235,6 +4235,24 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a4895175b425cb1f87721b59f0f286c2092bd4af812243672510e1ac53e2e0ad"
 
 [[package]]
+name = "ooze-ordering"
+version = "0.1.0"
+dependencies = [
+ "bincode",
+ "log",
+ "rand 0.9.4",
+ "rand_chacha 0.9.0",
+ "serde",
+ "serde-big-array",
+ "sha2 0.10.9",
+ "solana-keypair",
+ "solana-pubkey 4.2.0",
+ "solana-signature",
+ "solana-signer",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "opaque-debug"
 version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5731,9 +5749,9 @@ checksum = "38b58827f4464d87d377d175e90bf58eb00fd8716ff0a62f80356b5e61555d0d"
 
 [[package]]
 name = "siphasher"
-version = "1.0.2"
+version = "1.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b2aa850e253778c88a04c3d7323b043aeda9d3e30d5971937c1855769763678e"
+checksum = "8ee5873ec9cce0195efcb7a4e9507a04cd49aec9c83d0389df45b1ef7ba2e649"
 
 [[package]]
 name = "slab"
@@ -6566,6 +6584,7 @@ dependencies = [
  "min-max-heap",
  "num_cpus",
  "num_enum",
+ "ooze-ordering",
  "qualifier_attr",
  "rand 0.9.4",
  "rand_chacha 0.9.0",
@@ -7075,7 +7094,7 @@ dependencies = [
  "serde",
  "serde-big-array",
  "serde_bytes",
- "siphasher 1.0.2",
+ "siphasher 1.0.3",
  "solana-bloom",
  "solana-client",
  "solana-clock",
