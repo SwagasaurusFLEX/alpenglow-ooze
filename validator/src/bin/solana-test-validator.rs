@@ -417,6 +417,9 @@ fn main() {
     genesis.transaction_account_lock_limit =
         value_t!(matches, "transaction_account_lock_limit", usize).ok();
     genesis.enable_scheduler_bindings = matches.is_present("enable_scheduler_bindings");
+    if let Some(method) = matches.value_of("block_production_method") {
+        genesis.block_production_method = method.parse().expect("invalid block-production-method; clap should have validated this");
+    }
 
     let tower_storage = Arc::new(FileTowerStorage::new(ledger_path.clone()));
     let vote_history_storage = Arc::new(FileVoteHistoryStorage::new(ledger_path.clone()));
