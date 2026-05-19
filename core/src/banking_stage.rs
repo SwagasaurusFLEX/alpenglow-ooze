@@ -10,6 +10,7 @@ use {
         banking_stage::{
             consume_worker::ConsumeWorker,
             transaction_scheduler::{
+                ooze_scheduler::{OozeScheduler, OozeSchedulerConfig},
                 scheduler_controller::{
                     DEFAULT_SCHEDULER_PACING_FILL_TIME_MILLIS, SchedulerConfig, SchedulerController,
                 },
@@ -23,6 +24,7 @@ use {
     futures::{StreamExt, stream::FuturesUnordered},
     histogram::Histogram,
     solana_gossip::{cluster_info::ClusterInfo, contact_info::ContactInfoQuery},
+    solana_keypair::Keypair,
     solana_ledger::blockstore_processor::TransactionStatusSender,
     solana_perf::packet::PACKETS_PER_BATCH,
     solana_poh::{
@@ -323,6 +325,15 @@ impl LikeClusterInfo for Arc<ClusterInfo> {
     }
 }
 
+/// Selects which scheduling strategy `spawn_internal_central` should
+/// instantiate. Mapped 1:1 from `BlockProductionMethod`.
+#[derive(Copy, Clone, Debug)]
+enum SchedulerKind {
+    Greedy,
+    PrioGraph,
+    Ooze,
+}
+
 pub struct BankingStage {
     banking_shutdown_signal: CancellationToken,
     worker_exit_signal: Arc<AtomicBool>,
@@ -335,6 +346,7 @@ pub struct BankingStage {
     bank_forks: Arc<RwLock<BankForks>>,
     committer: Committer,
     log_messages_bytes_limit: Option<usize>,
+    identity_keypair: Arc<Keypair>,
     filter_keys: Arc<HashSet<Pubkey>>,
     threads: FuturesUnordered<NamedTask<std::thread::Result<()>>>,
 }
@@ -354,6 +366,7 @@ impl BankingStage {
         transaction_status_sender: Option<TransactionStatusSender>,
         replay_vote_sender: ReplayVoteSender,
         log_messages_bytes_limit: Option<usize>,
+        identity_keypair: Arc<Keypair>,
         bank_forks: Arc<RwLock<BankForks>>,
         prioritization_fee_cache: Option<Arc<PrioritizationFeeCache>>,
         filter_keys: Arc<HashSet<Pubkey>>,
@@ -378,6 +391,7 @@ impl BankingStage {
             bank_forks,
             committer,
             log_messages_bytes_limit,
+            identity_keypair,
             filter_keys,
             threads: FuturesUnordered::default(),
         };
@@ -471,9 +485,14 @@ impl BankingStage {
                 num_workers,
                 config,
             } => match block_production_method {
-                BlockProductionMethod::CentralScheduler
-                | BlockProductionMethod::CentralSchedulerGreedy => {
-                    self.spawn_internal_central(num_workers, config)
+                BlockProductionMethod::CentralScheduler => {
+                    self.spawn_internal_central(SchedulerKind::PrioGraph, num_workers, config)
+                }
+                BlockProductionMethod::CentralSchedulerGreedy => {
+                    self.spawn_internal_central(SchedulerKind::Greedy, num_workers, config)
+                }
+                BlockProductionMethod::Ooze => {
+                    self.spawn_internal_central(SchedulerKind::Ooze, num_workers, config)
                 }
             },
             #[cfg(unix)]
@@ -492,6 +511,7 @@ impl BankingStage {
 
     fn spawn_internal_central(
         &self,
+        scheduler_kind: SchedulerKind,
         num_workers: NonZeroUsize,
         scheduler_config: SchedulerConfig,
     ) -> Result<Vec<JoinHandle<()>>, ()> {
@@ -550,47 +570,71 @@ impl BankingStage {
             )
         }
 
-        // Both block production methods currently route to the greedy scheduler.
-        let scheduler = GreedyScheduler::new(
-            work_senders,
-            finished_work_receiver,
-            GreedySchedulerConfig::default(),
-        );
-        let exit = exit.clone();
+        // Construct the scheduler based on SchedulerKind. The controller/spawn/
+        // shutdown plumbing is identical across types, so we generate it once via
+        // a local macro and let the compiler monomorphize. CentralScheduler and
+        // CentralSchedulerGreedy both route to GreedyScheduler in Alpenglow; Ooze
+        // is the new VRF-based fair-ordering path.
         let shutdown_signal = self.banking_shutdown_signal.clone();
-        threads.push(
-            Builder::new()
-                .name("solBnkTxSched".to_string())
-                .spawn(move || {
-                    let mut scheduler_controller = SchedulerController::new(
-                        exit,
-                        scheduler_config,
-                        decision_maker,
-                        receive_and_buffer,
-                        sharable_banks,
-                        scheduler,
-                        worker_metrics,
-                    );
+        macro_rules! spawn_scheduler {
+            ($scheduler:expr) => {{
+                let exit = exit.clone();
+                let shutdown_signal = shutdown_signal.clone();
+                threads.push(
+                    Builder::new()
+                        .name("solBnkTxSched".to_string())
+                        .spawn(move || {
+                            let mut scheduler_controller = SchedulerController::new(
+                                exit,
+                                scheduler_config,
+                                decision_maker,
+                                receive_and_buffer,
+                                sharable_banks,
+                                $scheduler,
+                                worker_metrics,
+                            );
 
-                    match scheduler_controller.run() {
-                        Ok(_) => info!("Scheduler exiting without error"),
-                        Err(SchedulerError::DisconnectedRecvChannel(_)) => {
-                            info!("Upstream disconnected, shutting down banking");
+                            match scheduler_controller.run() {
+                                Ok(_) => info!("Scheduler exiting without error"),
+                                Err(SchedulerError::DisconnectedRecvChannel(_)) => {
+                                    info!("Upstream disconnected, shutting down banking");
 
-                            // NB: We must signal shutdown before dropping the scheduler
-                            //     controller, else, the workers may exit with an error and
-                            //     trigger a new spawn before we have a chance to issue the
-                            //     cancel.
-                            shutdown_signal.cancel();
-                            drop(scheduler_controller);
-                        }
-                        Err(SchedulerError::DisconnectedSendChannel(_)) => {
-                            warn!("Unexpected worker disconnect from scheduler")
-                        }
-                    }
-                })
-                .unwrap(),
-        );
+                                    // NB: We must signal shutdown before dropping the scheduler
+                                    //     controller, else, the workers may exit with an error and
+                                    //     trigger a new spawn before we have a chance to issue the
+                                    //     cancel.
+                                    shutdown_signal.cancel();
+                                    drop(scheduler_controller);
+                                }
+                                Err(SchedulerError::DisconnectedSendChannel(_)) => {
+                                    warn!("Unexpected worker disconnect from scheduler")
+                                }
+                            }
+                        })
+                        .unwrap(),
+                );
+            }};
+        }
+
+        match scheduler_kind {
+            SchedulerKind::Greedy | SchedulerKind::PrioGraph => {
+                let scheduler = GreedyScheduler::new(
+                    work_senders,
+                    finished_work_receiver,
+                    GreedySchedulerConfig::default(),
+                );
+                spawn_scheduler!(scheduler);
+            }
+            SchedulerKind::Ooze => {
+                let scheduler = OozeScheduler::new(
+                    work_senders,
+                    finished_work_receiver,
+                    OozeSchedulerConfig::default(),
+                    self.identity_keypair.clone(),
+                );
+                spawn_scheduler!(scheduler);
+            }
+        }
 
         Ok(threads)
     }

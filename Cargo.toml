@@ -53,6 +53,7 @@ members = [
     "metrics",
     "net-utils",
     "notifier",
+    "ooze-ordering",
     "perf",
     "poh",
     "poh-bench",
@@ -309,6 +310,7 @@ num-derive = "0.4"
 num-traits = "0.2"
 num_cpus = "1.17.0"
 num_enum = "0.7.6"
+ooze-ordering = { path = "ooze-ordering" }
 openssl = "0.10"
 pairing = "0.23.0"
 parking_lot = "0.12"
