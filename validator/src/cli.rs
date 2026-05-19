@@ -827,6 +827,14 @@ pub fn test_app<'a>(version: &'a str, default_args: &'a DefaultTestArgs) -> App<
                 .help("Enables external processes to connect and manage block production"),
         )
         .arg(
+            Arg::with_name("block_production_method")
+                .long("block-production-method")
+                .value_name("METHOD")
+                .takes_value(true)
+                .possible_values(solana_core::validator::BlockProductionMethod::cli_names())
+                .help("Select transaction scheduler (e.g. ooze for VRF-fair ordering)"),
+        )
+        .arg(
             Arg::with_name("deactivate_feature")
                 .long("deactivate-feature")
                 .takes_value(true)
