@@ -207,6 +207,7 @@ pub enum BlockProductionMethod {
     CentralScheduler,
     #[default]
     CentralSchedulerGreedy,
+    Ooze,
 }
 
 impl BlockProductionMethod {

@@ -299,6 +299,7 @@ impl Tpu {
             transaction_status_sender,
             replay_vote_sender,
             log_messages_bytes_limit,
+            std::sync::Arc::new(keypair.insecure_clone()),
             bank_forks.clone(),
             prioritization_fee_cache,
             filter_keys,
