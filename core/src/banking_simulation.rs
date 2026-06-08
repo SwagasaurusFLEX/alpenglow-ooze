@@ -813,7 +813,7 @@ impl BankingSimulator {
         let random_keypair = Arc::new(Keypair::new());
         let cluster_info_for_broadcast = Arc::new(ClusterInfo::new(
             Node::new_localhost_with_pubkey(&random_keypair.pubkey()).info,
-            random_keypair,
+            random_keypair.clone(),
             SocketAddrSpace::Unspecified,
         ));
         // Broadcast stage is needed to save the simulated blocks for post-run analysis by
@@ -852,6 +852,7 @@ impl BankingSimulator {
             None,
             replay_vote_sender,
             None,
+            random_keypair.clone(),
             bank_forks.clone(),
             None,
             Arc::default(),

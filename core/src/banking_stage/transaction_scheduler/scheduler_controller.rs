@@ -311,17 +311,19 @@ where
         }
 
         // Build our recheck batch & feed it through bank.
-        let txs = {
-            // NB: Always allocate a the same size chunk to help jemalloc predict us.
-            let mut txs = Vec::with_capacity(CHECK_CHUNK);
-            txs.extend(self.recheck_chunk.iter().map(|pid| {
-                self.container
-                    .get_transaction(pid.id)
-                    .expect("transaction must exist")
-            }));
-
-            txs
-        };
+	// NB: a transaction may have been removed from the container between
+        // building recheck_chunk and now (concurrent drops under fork churn),
+        // so skip missing ones instead of panicking. Keep (pid, tx) paired so
+        // results line up 1:1 with the transactions actually checked.
+        let checked: Vec<_> = self
+            .recheck_chunk
+            .iter()
+            .filter_map(|pid| self.container.get_transaction(pid.id).map(|tx| (*pid, tx)))
+            .collect();
+        if checked.is_empty() {
+            return;
+        }
+        let txs: Vec<_> = checked.iter().map(|(_, tx)| *tx).collect();
         let lock_results = vec![Ok(()); txs.len()];
         let mut error_counters = TransactionErrorMetrics::default();
         let results = bank.check_transactions::<R::Transaction>(
@@ -330,20 +332,21 @@ where
             bank.max_processing_age(),
             &mut error_counters,
         );
-
-        let mut num_dropped = Saturating(0usize);
-        for (result, pid) in results.iter().zip(self.recheck_chunk.iter()) {
-            if result.is_err() {
-                num_dropped += 1;
-                self.container.remove_by_id(pid.id);
-            }
+	let mut num_dropped = Saturating(0usize);
+        let to_remove: Vec<_> = results
+            .iter()
+            .zip(checked.iter())
+            .filter_map(|(result, (pid, _))| result.is_err().then_some(*pid))
+            .collect();
+        drop(checked);
+        for pid in to_remove {
+            num_dropped += 1;
+            self.container.remove_by_id(pid.id);
         }
-
-        self.count_metrics.update(|count_metrics| {
+	self.count_metrics.update(|count_metrics| {
             count_metrics.num_dropped_on_clean += num_dropped;
         });
     }
-
     /// Receives completed transactions from the workers and updates metrics.
     fn receive_completed(&mut self) -> Result<(), SchedulerError> {
         let ((num_transactions, num_retryable), receive_completed_time_us) =
