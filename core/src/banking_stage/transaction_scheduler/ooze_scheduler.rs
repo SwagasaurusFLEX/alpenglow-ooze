@@ -200,7 +200,7 @@ impl<Tx: TransactionWithMeta> Scheduler<Tx> for OozeScheduler<Tx> {
             num_scanned += 1;
 
             let Some(transaction_state) = container.get_mut_transaction_state(id.id) else {
-                panic!("transaction state must exist")
+                continue;
             };
 
             match try_schedule_transaction(
