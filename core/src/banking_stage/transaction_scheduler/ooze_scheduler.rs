@@ -291,6 +291,10 @@ fn try_schedule_transaction<Tx: TransactionWithMeta>(
     schedulable_threads: ThreadSet,
     thread_selector: impl Fn(ThreadSet) -> ThreadId,
 ) -> Result<TransactionSchedulingInfo<Tx>, TransactionSchedulingError> {
+    if !transaction_state.has_transaction() {
+        // Tx was already taken (scheduled/in-flight) — not schedulable again.
+        return Err(TransactionSchedulingError::UnschedulableConflicts);
+    }
     let transaction = transaction_state.transaction();
     let account_keys = transaction.account_keys();
     let write_account_locks = account_keys

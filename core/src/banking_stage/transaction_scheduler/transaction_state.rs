@@ -79,6 +79,9 @@ impl<Tx> TransactionState<Tx> {
             .as_ref()
             .expect("transaction is not pending")
     }
+    pub(crate) fn has_transaction(&self) -> bool {
+        self.transaction.is_some()
+    }
 }
 
 #[cfg(test)]
