@@ -209,6 +209,9 @@ impl<Tx: TransactionWithMeta> Scheduler<Tx> for OozeScheduler<Tx> {
             let Some(transaction_state) = container.get_mut_transaction_state(id.id) else {
                 continue;
             };
+            if !transaction_state.has_transaction() {
+                continue;
+            }
 
             match try_schedule_transaction(
                 transaction_state,
