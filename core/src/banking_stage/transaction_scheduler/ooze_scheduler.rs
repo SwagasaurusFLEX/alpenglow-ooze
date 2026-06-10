@@ -1,10 +1,13 @@
 //! Ooze scheduler — fair ordering via VRF-seeded randomness.
 //!
 //! Drop-in replacement for GreedyScheduler. Before each scheduling pass,
-//! drains the priority queue, runs a VRF shuffle, rewrites each
-//! TransactionPriorityId's priority field to a descending counter so
-//! the BTreeSet re-sorts in our shuffled order, then runs the standard
-//! greedy loop from that reshuffled queue.
+//! drains the priority queue into an owned list, VRF-shuffles that list,
+//! and feeds the greedy loop directly from it. Queue priority keys are
+//! never rewritten, so the container's map and queue always agree about
+//! every id — required because `remove_by_id` reconstructs the queue key
+//! from the state's stored priority. Unscanned and unschedulable ids are
+//! returned to the queue with their original priority ids at the end of
+//! the pass.
 //!
 //! Priority fees are still paid (validator revenue preserved) but
 //! no longer determine ordering. Atomic bundling, sandwich attacks,
@@ -89,14 +92,18 @@ impl<Tx: TransactionWithMeta> OozeScheduler<Tx> {
         }
     }
 
-    /// Drain the priority queue, VRF-shuffle the IDs, rewrite priorities
-    /// so the BTreeSet sorts in shuffled order, and push back.
-    fn apply_ooze_ordering<S: StateContainer<Tx>>(&mut self, container: &mut S) {
+    /// Drain the priority queue and return the schedulable ids in
+    /// VRF-shuffled order. Original priority ids are preserved — queue
+    /// keys are never rewritten, so the container's map and queue can
+    /// never disagree about an id. Ids whose Tx was already taken
+    /// (scheduled/in-flight) are dropped here; their container entries
+    /// are retired by the completion path.
+    fn drain_and_shuffle<S: StateContainer<Tx>>(
+        &mut self,
+        container: &mut S,
+    ) -> Vec<TransactionPriorityId> {
         let mut drained: Vec<TransactionPriorityId> = Vec::new();
         while let Some(id) = container.pop() {
-            // Only re-circulate transactions that still hold their Tx.
-            // Ids whose Tx was already taken (scheduled/in-flight) must not
-            // be shuffled back into the schedulable queue.
             if let Some(state) = container.get_mut_transaction_state(id.id) {
                 if state.has_transaction() {
                     drained.push(id);
@@ -105,8 +112,7 @@ impl<Tx: TransactionWithMeta> OozeScheduler<Tx> {
         }
 
         if drained.len() < 2 {
-            container.push_ids_into_queue(drained.into_iter());
-            return;
+            return drained;
         }
 
         // Commit over tx IDs. IDs are stable within a scheduling pass.
@@ -120,27 +126,15 @@ impl<Tx: TransactionWithMeta> OozeScheduler<Tx> {
         let mut rng = ChaCha20Rng::from_seed(vrf.randomness);
         drained.shuffle(&mut rng);
 
-        // Rewrite priorities: position 0 gets the highest new priority,
-        // so the BTreeSet pops it first.
-        let n = drained.len();
-        let reordered: Vec<TransactionPriorityId> = drained
-            .into_iter()
-            .enumerate()
-            .map(|(idx, p)| TransactionPriorityId {
-                priority: (n - idx) as u64,
-                id: p.id,
-            })
-            .collect();
-
         debug!(
             "OozeScheduler pass {}: shuffled {} txs (vrf pubkey prefix {:02x}{:02x})",
             self.pass_counter,
-            reordered.len(),
+            drained.len(),
             vrf.pubkey[0],
             vrf.pubkey[1]
         );
 
-        container.push_ids_into_queue(reordered.into_iter());
+        drained
     }
 }
 
@@ -150,9 +144,6 @@ impl<Tx: TransactionWithMeta> Scheduler<Tx> for OozeScheduler<Tx> {
         container: &mut S,
         budget: u64,
     ) -> Result<SchedulingSummary, SchedulerError> {
-        // THE KEY MODIFICATION: VRF-shuffle the queue before greedy loop.
-        self.apply_ooze_ordering(container);
-
         let mut budget = budget.saturating_sub(
             self.common
                 .in_flight_tracker
@@ -189,20 +180,25 @@ impl<Tx: TransactionWithMeta> Scheduler<Tx> for OozeScheduler<Tx> {
             "batches must start empty for scheduling"
         );
 
+        // THE KEY MODIFICATION: drain + VRF-shuffle into an owned list and
+        // schedule directly from it. The container's queue keys are never
+        // rewritten, so its invariants hold unconditionally.
+        let shuffled = self.drain_and_shuffle(container);
+
         let mut num_scanned: usize = 0;
         let mut num_scheduled = Saturating::<usize>(0);
         let mut num_sent: usize = 0;
         let mut num_unschedulable_conflicts: usize = 0;
         let mut num_unschedulable_threads: usize = 0;
+        let mut next_idx: usize = 0;
 
         while budget > 0
             && num_scanned < self.config.max_scanned_transactions_per_scheduling_pass
             && !schedulable_threads.is_empty()
-            && !container.is_empty()
+            && next_idx < shuffled.len()
         {
-            let Some(id) = container.pop() else {
-                unreachable!("container is not empty")
-            };
+            let id = shuffled[next_idx];
+            next_idx += 1;
 
             num_scanned += 1;
 
@@ -279,7 +275,14 @@ impl<Tx: TransactionWithMeta> Scheduler<Tx> for OozeScheduler<Tx> {
             "number of scheduled and sent transactions must match"
         );
 
-        container.push_ids_into_queue(self.unschedulables.drain(..));
+        // Return unscanned ids and unschedulables to the queue with their
+        // original priority ids.
+        container.push_ids_into_queue(
+            shuffled
+                .into_iter()
+                .skip(next_idx)
+                .chain(self.unschedulables.drain(..)),
+        );
 
         Ok(SchedulingSummary {
             starting_queue_size,
