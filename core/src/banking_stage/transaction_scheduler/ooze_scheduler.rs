@@ -94,7 +94,14 @@ impl<Tx: TransactionWithMeta> OozeScheduler<Tx> {
     fn apply_ooze_ordering<S: StateContainer<Tx>>(&mut self, container: &mut S) {
         let mut drained: Vec<TransactionPriorityId> = Vec::new();
         while let Some(id) = container.pop() {
-            drained.push(id);
+            // Only re-circulate transactions that still hold their Tx.
+            // Ids whose Tx was already taken (scheduled/in-flight) must not
+            // be shuffled back into the schedulable queue.
+            if let Some(state) = container.get_mut_transaction_state(id.id) {
+                if state.has_transaction() {
+                    drained.push(id);
+                }
+            }
         }
 
         if drained.len() < 2 {
